@@ -470,6 +470,13 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         ...(process.env.MCP_REMOTE_URL ? ['mcp__remote__*'] : []),
+        'mcp__gmail__gmail_read_message',
+        'mcp__gmail__gmail_read_thread',
+        'mcp__gmail__gmail_search_messages',
+        'mcp__gmail__gmail_create_draft',
+        'mcp__gmail__gmail_list_drafts',
+        'mcp__gmail__gmail_list_labels',
+        'mcp__gmail__gmail_get_profile',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -499,6 +506,10 @@ async function runQuery(
               },
             }
           : {}),
+        gmail: {
+          command: 'npx',
+          args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+        },
       },
       hooks: {
         PreCompact: [
