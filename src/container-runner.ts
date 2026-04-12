@@ -26,9 +26,15 @@ import {
 } from './container-runtime.js';
 import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
+import { readEnvFile } from './env.js';
 import { RegisteredGroup } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
+
+// Read MCP remote config from .env (not in process.env under launchd)
+const mcpEnv = readEnvFile(['MCP_REMOTE_URL', 'MCP_REMOTE_AUTH']);
+const MCP_REMOTE_URL = process.env.MCP_REMOTE_URL || mcpEnv.MCP_REMOTE_URL;
+const MCP_REMOTE_AUTH = process.env.MCP_REMOTE_AUTH || mcpEnv.MCP_REMOTE_AUTH;
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -265,6 +271,27 @@ async function buildContainerArgs(
       { containerName },
       'OneCLI gateway not reachable — container will have no credentials',
     );
+  }
+
+  // Pass MCP remote config to container if configured
+  if (MCP_REMOTE_URL) {
+    // Rewrite localhost URLs to host.docker.internal so the container can reach the host
+    const mcpUrl = MCP_REMOTE_URL.replace(
+      /localhost|127\.0\.0\.1/,
+      'host.docker.internal',
+    );
+    args.push('-e', `MCP_REMOTE_URL=${mcpUrl}`);
+    if (MCP_REMOTE_AUTH) {
+      args.push('-e', `MCP_REMOTE_AUTH=${MCP_REMOTE_AUTH}`);
+    }
+    // Exclude MCP remote host from OneCLI proxy so mcp-remote connects directly
+    try {
+      const mcpHost = new URL(mcpUrl).hostname;
+      args.push('-e', `NO_PROXY=${mcpHost},registry.npmjs.org`);
+      args.push('-e', `no_proxy=${mcpHost},registry.npmjs.org`);
+    } catch {
+      /* invalid URL, skip */
+    }
   }
 
   // Runtime-specific args for host gateway resolution

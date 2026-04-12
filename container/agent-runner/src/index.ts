@@ -469,6 +469,7 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
+        ...(process.env.MCP_REMOTE_URL ? ['mcp__remote__*'] : []),
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -484,6 +485,20 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        ...(process.env.MCP_REMOTE_URL
+          ? {
+              remote: {
+                command: 'node',
+                args: [
+                  '/app/node_modules/.bin/mcp-remote',
+                  process.env.MCP_REMOTE_URL,
+                  ...(process.env.MCP_REMOTE_AUTH
+                    ? ['--header', `Authorization: Bearer ${process.env.MCP_REMOTE_AUTH}`]
+                    : []),
+                ],
+              },
+            }
+          : {}),
       },
       hooks: {
         PreCompact: [
