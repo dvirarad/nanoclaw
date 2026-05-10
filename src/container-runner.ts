@@ -63,7 +63,9 @@ async function refreshGoogleTokens(): Promise<void> {
         needsRefresh = true;
         break;
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   if (!needsRefresh) return;
@@ -91,7 +93,11 @@ async function refreshGoogleTokens(): Promise<void> {
       return;
     }
 
-    const data = (await resp.json()) as { access_token: string; expires_in: number; token_type: string };
+    const data = (await resp.json()) as {
+      access_token: string;
+      expires_in: number;
+      token_type: string;
+    };
     const updated = {
       ...creds,
       access_token: data.access_token,

@@ -266,7 +266,10 @@ export class WhatsAppChannel implements Channel {
                 const transcript = await transcribeAudioMessage(msg, this.sock);
                 if (transcript) {
                   content = `[Voice: ${transcript}]`;
-                  logger.info({ chatJid, length: transcript.length }, 'Transcribed voice message');
+                  logger.info(
+                    { chatJid, length: transcript.length },
+                    'Transcribed voice message',
+                  );
                 } else {
                   content = '[Voice Message - transcription unavailable]';
                 }
