@@ -38,7 +38,7 @@ interface ContainerInput {
 
 interface ImageContentBlock {
   type: 'image';
-  source: { type: 'base64'; media_type: string; data: string };
+  source: { type: 'base64'; media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'; data: string };
 }
 interface TextContentBlock {
   type: 'text';
@@ -414,7 +414,7 @@ async function runQuery(
       const imgPath = path.join('/workspace/group', img.relativePath);
       try {
         const data = fs.readFileSync(imgPath).toString('base64');
-        blocks.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data } });
+        blocks.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType as ImageContentBlock['source']['media_type'], data } });
       } catch (err) {
         log(`Failed to load image: ${imgPath}`);
       }
@@ -513,6 +513,7 @@ async function runQuery(
         'mcp__gmail__draft_email',
         'mcp__gmail__list_email_labels',
         'mcp__gmail__download_attachment',
+        'mcp__calendar__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -545,6 +546,10 @@ async function runQuery(
         gmail: {
           command: 'npx',
           args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+        },
+        calendar: {
+          command: 'npx',
+          args: ['-y', '@gongrzhe/server-calendar-autoauth-mcp'],
         },
       },
       hooks: {

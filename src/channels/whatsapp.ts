@@ -22,6 +22,7 @@ import {
 import { getLastGroupSync, setLastGroupSync, updateChatName } from '../db.js';
 import { isImageMessage, processImage } from '../image.js';
 import { logger } from '../logger.js';
+import { isVoiceMessage, transcribeAudioMessage } from '../transcription.js';
 import {
   Channel,
   OnInboundMessage,
@@ -205,6 +206,12 @@ export class WhatsAppChannel implements Channel {
               normalized.videoMessage?.caption ||
               '';
 
+            // Strip orphan Unicode surrogates that break JSON serialization downstream
+            content = content.replace(
+              /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+              '',
+            );
+
             // PDF attachment handling
             if (normalized?.documentMessage?.mimetype === 'application/pdf') {
               try {
@@ -214,7 +221,7 @@ export class WhatsAppChannel implements Channel {
                 fs.mkdirSync(attachDir, { recursive: true });
                 const filename = path.basename(
                   normalized.documentMessage.fileName ||
-                  `doc-${Date.now()}.pdf`,
+                    `doc-${Date.now()}.pdf`,
                 );
                 const filePath = path.join(attachDir, filename);
                 fs.writeFileSync(filePath, buffer as Buffer);
@@ -240,7 +247,11 @@ export class WhatsAppChannel implements Channel {
                 const buffer = await downloadMediaMessage(msg, 'buffer', {});
                 const groupDir = path.join(GROUPS_DIR, groups[chatJid].folder);
                 const caption = normalized?.imageMessage?.caption ?? '';
-                const result = await processImage(buffer as Buffer, groupDir, caption);
+                const result = await processImage(
+                  buffer as Buffer,
+                  groupDir,
+                  caption,
+                );
                 if (result) {
                   content = result.content;
                 }
@@ -249,8 +260,25 @@ export class WhatsAppChannel implements Channel {
               }
             }
 
+            // Transcribe voice messages before storing
+            if (isVoiceMessage(msg)) {
+              try {
+                const transcript = await transcribeAudioMessage(msg, this.sock);
+                if (transcript) {
+                  content = `[Voice: ${transcript}]`;
+                  logger.info({ chatJid, length: transcript.length }, 'Transcribed voice message');
+                } else {
+                  content = '[Voice Message - transcription unavailable]';
+                }
+              } catch (err) {
+                logger.error({ err }, 'Voice transcription error');
+                content = '[Voice Message - transcription failed]';
+              }
+            }
+
             // Skip protocol messages with no text content (encryption keys, read receipts, etc.)
-            if (!content) continue;
+            // but allow voice messages through for transcription
+            if (!content && !isVoiceMessage(msg)) continue;
 
             const sender = msg.key.participant || msg.key.remoteJid || '';
             const senderName = msg.pushName || sender.split('@')[0];

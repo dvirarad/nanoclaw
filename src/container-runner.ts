@@ -37,6 +37,79 @@ const mcpEnv = readEnvFile(['MCP_REMOTE_URL', 'MCP_REMOTE_AUTH']);
 const MCP_REMOTE_URL = process.env.MCP_REMOTE_URL || mcpEnv.MCP_REMOTE_URL;
 const MCP_REMOTE_AUTH = process.env.MCP_REMOTE_AUTH || mcpEnv.MCP_REMOTE_AUTH;
 
+/**
+ * Refresh Google OAuth tokens if they expire within 10 minutes.
+ * Updates credentials files for both Gmail and Calendar MCPs.
+ */
+async function refreshGoogleTokens(): Promise<void> {
+  const homeDir = os.homedir();
+  const oauthKeysPath = path.join(homeDir, '.gmail-mcp', 'gcp-oauth.keys.json');
+  if (!fs.existsSync(oauthKeysPath)) return;
+
+  const dirs = [
+    path.join(homeDir, '.gmail-mcp'),
+    path.join(homeDir, '.calendar-mcp'),
+  ];
+
+  // Check if any token needs refresh (expires within 10 min)
+  const TEN_MIN = 10 * 60 * 1000;
+  let needsRefresh = false;
+  for (const dir of dirs) {
+    const credsPath = path.join(dir, 'credentials.json');
+    if (!fs.existsSync(credsPath)) continue;
+    try {
+      const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+      if (!creds.expiry_date || Date.now() > creds.expiry_date - TEN_MIN) {
+        needsRefresh = true;
+        break;
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (!needsRefresh) return;
+
+  try {
+    const oauthKeys = JSON.parse(fs.readFileSync(oauthKeysPath, 'utf-8'));
+    const client = oauthKeys.installed || oauthKeys.web;
+    const credsPath = path.join(dirs[0], 'credentials.json');
+    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+
+    const params = new URLSearchParams({
+      client_id: client.client_id,
+      client_secret: client.client_secret,
+      refresh_token: creds.refresh_token,
+      grant_type: 'refresh_token',
+    });
+
+    const resp = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      body: params,
+    });
+
+    if (!resp.ok) {
+      logger.warn({ status: resp.status }, 'Google token refresh failed');
+      return;
+    }
+
+    const data = (await resp.json()) as { access_token: string; expires_in: number; token_type: string };
+    const updated = {
+      ...creds,
+      access_token: data.access_token,
+      expiry_date: Date.now() + data.expires_in * 1000,
+    };
+
+    for (const dir of dirs) {
+      const target = path.join(dir, 'credentials.json');
+      if (fs.existsSync(dir)) {
+        fs.writeFileSync(target, JSON.stringify(updated, null, 2));
+      }
+    }
+    logger.info('Refreshed Google OAuth tokens');
+  } catch (err) {
+    logger.warn({ err }, 'Google token refresh error');
+  }
+}
+
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
@@ -203,6 +276,16 @@ function buildVolumeMounts(
     });
   }
 
+  // Calendar credentials directory (for Calendar MCP inside the container)
+  const calendarDir = path.join(homeDir, '.calendar-mcp');
+  if (fs.existsSync(calendarDir)) {
+    mounts.push({
+      hostPath: calendarDir,
+      containerPath: '/home/node/.calendar-mcp',
+      readonly: false,
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
@@ -340,6 +423,9 @@ export async function runContainerAgent(
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
+
+  // Refresh Google OAuth tokens before spawning (prevents mid-session expiry)
+  await refreshGoogleTokens();
 
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
