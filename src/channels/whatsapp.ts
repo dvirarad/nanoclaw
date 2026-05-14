@@ -39,7 +39,9 @@ import {
 import type { GroupMetadata, WAMessageKey, WAMessage, WASocket } from '@whiskeysockets/baileys';
 
 import { isSafeAttachmentName } from '../attachment-safety.js';
-import { ASSISTANT_HAS_OWN_NUMBER, ASSISTANT_NAME, DATA_DIR } from '../config.js';
+import { ASSISTANT_HAS_OWN_NUMBER, ASSISTANT_NAME, DATA_DIR, GROUPS_DIR } from '../config.js';
+import { getAgentGroup } from '../db/agent-groups.js';
+import { getMessagingGroupByPlatform, getMessagingGroupAgents } from '../db/messaging-groups.js';
 import { readEnvFile } from '../env.js';
 import { log } from '../log.js';
 import { transcribeAudioFile, TRANSCRIPTION_FALLBACK } from '../transcription.js';
@@ -332,19 +334,59 @@ registerChannelAdapter('whatsapp', {
       }
     }
 
-    /** Download media from an inbound message, save to /workspace/attachments/. */
+    /**
+     * Resolve the destination group folder for an inbound chat. Picks the
+     * wired agent group with the highest priority. Returns null when the
+     * messaging group is missing or has no wirings yet (cold-DM auto-create
+     * happens later in the router) — callers should skip download in that
+     * case so attachments don't end up orphaned on disk.
+     *
+     * Multi-agent caveat: when one messaging group is wired to several agent
+     * groups, the file lands in the highest-priority group's folder only.
+     * For shared/agent-shared modes that need the file visible to all wired
+     * agents, this needs revisiting (symlink fan-out or a shared mount).
+     */
+    function resolveGroupFolder(chatJid: string): string | null {
+      const mg = getMessagingGroupByPlatform('whatsapp', chatJid);
+      if (!mg) return null;
+      const agents = getMessagingGroupAgents(mg.id);
+      if (agents.length === 0) return null;
+      const ag = getAgentGroup(agents[0].agent_group_id);
+      return ag?.folder ?? null;
+    }
+
+    /**
+     * Download media from an inbound message, save into the destination
+     * agent group's `attachments/` folder so the file lands at
+     * `/workspace/agent/attachments/<name>` inside the container (the group
+     * folder is mounted at `/workspace/agent/`). Returns metadata with both
+     * the container-relative `localPath` and the absolute `hostPath` so
+     * host-side consumers (e.g. transcription) can read directly.
+     */
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async function downloadInboundMedia(
       msg: WAMessage,
       normalized: any,
-    ): Promise<Array<{ type: string; name: string; localPath: string }>> {
+      chatJid: string,
+    ): Promise<Array<{ type: string; name: string; localPath: string; hostPath: string }>> {
+      const folder = resolveGroupFolder(chatJid);
+      if (!folder) {
+        log.debug('Skipping media download — messaging group not wired to any agent group', { chatJid });
+        return [];
+      }
+
       const mediaTypes: Array<{ key: string; type: string; ext: string }> = [
         { key: 'imageMessage', type: 'image', ext: '.jpg' },
         { key: 'videoMessage', type: 'video', ext: '.mp4' },
         { key: 'audioMessage', type: 'audio', ext: '.ogg' },
         { key: 'documentMessage', type: 'document', ext: '' },
       ];
-      const results: Array<{ type: string; name: string; localPath: string }> = [];
+      const results: Array<{
+        type: string;
+        name: string;
+        localPath: string;
+        hostPath: string;
+      }> = [];
       for (const { key, type, ext } of mediaTypes) {
         if (!normalized[key]) continue;
         try {
@@ -361,12 +403,19 @@ registerChannelAdapter('whatsapp', {
               replacement: filename,
             });
           }
-          const attachDir = path.join(DATA_DIR, 'attachments');
+          const attachDir = path.join(GROUPS_DIR, folder, 'attachments');
           fs.mkdirSync(attachDir, { recursive: true });
           const filePath = path.join(attachDir, filename);
           fs.writeFileSync(filePath, buffer);
-          results.push({ type, name: filename, localPath: `attachments/${filename}` });
-          log.info('Media downloaded', { type, filename });
+          // localPath is relative to /workspace (set by formatter). Group
+          // folder is mounted at /workspace/agent/, so prefix with `agent/`.
+          results.push({
+            type,
+            name: filename,
+            localPath: `agent/attachments/${filename}`,
+            hostPath: filePath,
+          });
+          log.info('Media downloaded', { type, filename, folder });
         } catch (err) {
           log.warn('Failed to download media', { type, err });
         }
@@ -572,14 +621,16 @@ registerChannelAdapter('whatsapp', {
             content = content.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
 
             // Download media attachments (images, video, audio, documents)
-            const attachments = await downloadInboundMedia(msg, normalized);
+            const attachments = await downloadInboundMedia(msg, normalized, chatJid);
 
             // Voice message transcription via OpenAI Whisper. Prepend transcript
             // (or fallback) to content so the agent sees the spoken text inline.
+            // Pass the absolute hostPath — localPath is now relative to /workspace
+            // (container-side) which doesn't resolve correctly on the host.
             if (normalized.audioMessage) {
               const audio = attachments.find((a) => a.type === 'audio');
               if (audio) {
-                const transcript = await transcribeAudioFile(audio.localPath);
+                const transcript = await transcribeAudioFile(audio.hostPath);
                 const prefix = transcript ?? TRANSCRIPTION_FALLBACK;
                 content = content ? `${prefix}\n${content}` : prefix;
               }
@@ -653,7 +704,11 @@ registerChannelAdapter('whatsapp', {
                 text: content,
                 sender,
                 senderName,
-                ...(attachments.length > 0 && { attachments }),
+                // Strip host-only `hostPath` before serializing into messages_in —
+                // the container only needs the container-relative `localPath`.
+                ...(attachments.length > 0 && {
+                  attachments: attachments.map(({ hostPath: _hostPath, ...rest }) => rest),
+                }),
                 fromMe,
                 isBotMessage,
                 isGroup,
