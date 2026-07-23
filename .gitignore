@@ -39,3 +39,4 @@ groups/*
 .nanoclaw/
 
 agents-sdk-docs
+tools/clidash/clidash.config.json
