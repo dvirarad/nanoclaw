@@ -24,6 +24,9 @@ ARG AGENT_BROWSER_VERSION=latest
 ARG VERCEL_VERSION=52.2.1
 ARG BUN_VERSION=1.3.12
 ARG GMAIL_MCP_VERSION=1.1.11
+ARG CALENDAR_MCP_VERSION=1.0.2
+ARG GDRIVE_MCP_VERSION=0.1.0
+ARG FORMS_MCP_VERSION=1.0.2
 ARG MCP_REMOTE_VERSION=0.1.29
 
 # ---- System dependencies -----------------------------------------------------
@@ -116,6 +119,9 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g \
         "@gongrzhe/server-gmail-autoauth-mcp@${GMAIL_MCP_VERSION}" \
+        "@gongrzhe/server-calendar-autoauth-mcp@${CALENDAR_MCP_VERSION}" \
+        "mcp-gdrive-workspace@${GDRIVE_MCP_VERSION}" \
+        "@matthewwolff/google-forms-mcp@${FORMS_MCP_VERSION}" \
         "zod-to-json-schema@3.22.5"
 
 RUN --mount=type=cache,target=/root/.cache/pnpm \
